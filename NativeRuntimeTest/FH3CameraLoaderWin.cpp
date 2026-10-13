@@ -1,5 +1,6 @@
 #ifdef _WIN32
 #include "RetailBuildIdentityWin.hpp"
+#include "FH3ProcessDiagnosticsWin.hpp"
 #include <windows.h>
 #include <tlhelp32.h>
 #include <string>
@@ -43,8 +44,9 @@ std::uintptr_t ModuleBase(DWORD pid, const wchar_t* name) {
 }
 int wmain(int argc, wchar_t** argv) {
     if(sizeof(void*)!=8) {std::fwprintf(stderr,L"ERROR: 64-bit loader required\n");return 2;}
-    if(argc!=2 || (wcscmp(argv[1],L"--check")!=0 && wcscmp(argv[1],L"--activate")!=0)) {
-        std::wprintf(L"FH3 Native Camera Stage 5 | --check (read-only) or --activate (inject test DLL)\n");return 1;
+    if(argc!=2 || (wcscmp(argv[1],L"--check")!=0 && wcscmp(argv[1],L"--activate")!=0 &&
+                   wcscmp(argv[1],L"--diagnose")!=0 && wcscmp(argv[1],L"--probe")!=0)) {
+        std::wprintf(L"FH3 Native Camera Stage 5.2 | --check / --diagnose (read-only), --probe (inert DLL), --activate (camera DLL)\n");return 1;
     }
     const auto game=FindGame();
     if(!game.pid) {std::fwprintf(stderr,L"FH3 retail process not found\n");return 2;}
@@ -55,18 +57,25 @@ int wmain(int argc, wchar_t** argv) {
     if(wcscmp(argv[1],L"--check")==0) {
         std::wprintf(L"CHECK_OK: no game memory changed.\n");return 0;
     }
+    if(wcscmp(argv[1],L"--diagnose")==0) {
+        FH3PrintProcessDiagnostics(game.pid);
+        std::wprintf(L"DIAG_OK: no game memory changed.\n");
+        return 0;
+    }
+    const bool probe=(wcscmp(argv[1],L"--probe")==0);
+    const wchar_t* dllName=probe ? L"FH3NativeLoadProbe.dll" : L"FH3NativeCameraTest.dll";
     wchar_t self[32768]{};
     if(!GetModuleFileNameW(nullptr,self,32768))return 4;
     std::wstring library=self;
     const auto slash=library.find_last_of(L"\\/");
     if(slash==std::wstring::npos)return 4;
     library.resize(slash+1);
-    library+=L"FH3NativeCameraTest.dll";
+    library+=dllName;
     if(GetFileAttributesW(library.c_str())==INVALID_FILE_ATTRIBUTES) {
         std::fwprintf(stderr,L"DLL missing next to loader: %ls\n",library.c_str());return 4;
     }
-    if(ModuleBase(game.pid,L"FH3NativeCameraTest.dll")) {
-        std::wprintf(L"Native camera test already loaded.\n");return 0;
+    if(ModuleBase(game.pid,dllName)) {
+        std::wprintf(L"%ls already loaded.\n",dllName);return 0;
     }
     // Stage 5.1: capture the result at EVERY failing API. An unsuccessful
     // Module32NextW ordinarily sets ERROR_NO_MORE_FILES (18); it cannot
@@ -181,7 +190,7 @@ int wmain(int argc, wchar_t** argv) {
         // The success criterion is target module presence, never the
         // truncated HMODULE returned by GetExitCodeThread.
         for(int attempt=0;attempt<30;++attempt) {
-            if(ModuleBase(game.pid,L"FH3NativeCameraTest.dll")) {
+            if(ModuleBase(game.pid,dllName)) {
                 loaded=true;
                 break;
             }
@@ -194,7 +203,8 @@ int wmain(int argc, wchar_t** argv) {
     } while(false);
 
     if(loaded) {
-        std::wprintf(L"DLL_LOADED. Ctrl+Alt+F8 FreeCam; Ctrl+Alt+F9 restore. Log: %%TEMP%%\\FH3_Native_Camera_Stage5.log\n");
+        if(probe) std::wprintf(L"PROBE_LOADED: minimal inert DLL loaded; no camera hooks or game-state changes.\n");
+        else std::wprintf(L"DLL_LOADED. Ctrl+Alt+F8 FreeCam; Ctrl+Alt+F9 restore. Log: %%TEMP%%\\FH3_Native_Camera_Stage5.log\n");
     } else {
         std::fwprintf(stderr,L"ACTIVATION_FAILED at: %ls\n",
                       failStage?failStage:L"unknown stage");
@@ -208,6 +218,8 @@ int wmain(int argc, wchar_t** argv) {
             std::fwprintf(stderr,L"Remote thread finished but target DLL was not confirmed loaded.\n");
         if(failStage && std::wcscmp(failStage,L"Locate remote LoadLibraryW owner")==0)
             std::fwprintf(stderr,L"Remote owner module missing or hidden; this is NOT Win32 error 18 as an injection failure.\n");
+        if(probe)std::fwprintf(stderr,L"INERT_PROBE_FAILED: target also failed to load the dependency-free probe DLL. Check --diagnose policies and process file access.\n");
+        else std::fwprintf(stderr,L"CAMERA_DLL_FAILED: try --probe to distinguish a camera-specific failure from a general loading restriction.\n");
         std::fwprintf(stderr,L"Do not assume anti-tamper until the failing operation is identified.\n");
     }
 
