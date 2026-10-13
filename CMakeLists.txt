@@ -11,3 +11,6 @@ add_subdirectory(NativeRuntimeTest)
 
 # Stage 6 independent, DLL-free external camera diagnostics and experiments.
 add_subdirectory(NativeExternalCamera)
+
+# Read-only Stage 7 runtime state tracing.
+add_subdirectory(NativeCameraTrace)
