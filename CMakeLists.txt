@@ -8,3 +8,6 @@ add_subdirectory(NativeCameraOwner)
 add_subdirectory(NativeCameraCapabilities)
 
 add_subdirectory(NativeRuntimeTest)
+
+# Stage 6 independent, DLL-free external camera diagnostics and experiments.
+add_subdirectory(NativeExternalCamera)
