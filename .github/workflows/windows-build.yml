@@ -14,6 +14,36 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@v4
+      - name: Unpack and publish Stage 5 source files
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $bundle = 'source_bundle/stage5-sources.tar.gz.b64'
+          if (Test-Path $bundle) {
+            @'
+          import base64, io, pathlib, tarfile
+          b64 = pathlib.Path('source_bundle/stage5-sources.tar.gz.b64').read_text()
+          with tarfile.open(fileobj=io.BytesIO(base64.b64decode(b64)), mode='r:gz') as archive:
+              for member in archive.getmembers():
+                  if not member.isfile() or member.name == 'README.md':
+                      continue
+                  relative = pathlib.PurePosixPath(member.name)
+                  if relative.is_absolute() or '..' in relative.parts:
+                      raise ValueError(f'Unsafe archive path: {member.name}')
+                  target = pathlib.Path(*relative.parts)
+                  target.parent.mkdir(parents=True, exist_ok=True)
+                  target.write_bytes(archive.extractfile(member).read())
+          '@ | python -
+            if ($LASTEXITCODE -ne 0) { throw 'Stage 5 source extraction failed' }
+            git config user.name 'github-actions[bot]'
+            git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+            git add CMakeLists.txt Stage5-Readme.md Build-Stage5.ps1 NativeCameraCore NativeCameraDiscovery NativeCameraOwner NativeCameraCapabilities NativeRuntimeTest Tests
+            git rm -- source_bundle/stage5-sources.tar.gz.b64
+            git commit -m 'Import complete Stage 5 native C++ source'
+            if ($LASTEXITCODE -ne 0) { throw 'Source commit failed' }
+            git push origin HEAD:main
+            if ($LASTEXITCODE -ne 0) { throw 'Source publication failed' }
+          }
       - name: Configure CMake x64
         run: cmake -S . -B build-windows -G "Visual Studio 17 2022" -A x64
       - name: Compile native DLL, loader, and tests
@@ -41,4 +71,4 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $tag = 'stage5-experimental-' + '${{ github.run_number }}'
-          gh release create $tag Stage5-Windows-Run/FH3NativeCameraLoader.exe Stage5-Windows-Run/FH3NativeCameraTest.dll Stage5-Windows-Run/README.md --title "Stage 5 experimental Windows x64 (${{ github.run_number }})" --notes "Experimental native camera activation ONLY. Not the finished debug menu. Compiled and unit-tested in GitHub Actions; untested in-game. Exact retail build hash required; the hook may crash. No RTSS dependency." --prerelease --target '${{ github.sha }}'
+          gh release create $tag Stage5-Windows-Run/FH3NativeCameraLoader.exe Stage5-Windows-Run/FH3NativeCameraTest.dll Stage5-Windows-Run/README.md --title "Stage 5 experimental Windows x64 (${{ github.run_number }})" --notes "Experimental native camera activation ONLY. Not the finished debug menu. Compiled and unit-tested in GitHub Actions; untested in-game. Exact retail build hash required; the hook may crash. No RTSS dependency." --prerelease --target (git rev-parse HEAD).Trim()
