@@ -1,4 +1,4 @@
-name: Native Stage 5.2 - Windows x64
+name: Native Camera Stage 6 - Windows x64
 
 on:
   push:
@@ -58,11 +58,13 @@ jobs:
           Copy-Item build-windows/NativeRuntimeTest/Release/FH3NativeCameraLoader.exe Stage5-Windows-Run/ -ErrorAction Stop
           Copy-Item build-windows/NativeRuntimeTest/Release/FH3NativeCameraTest.dll Stage5-Windows-Run/ -ErrorAction Stop
           Copy-Item build-windows/NativeRuntimeTest/Release/FH3NativeLoadProbe.dll Stage5-Windows-Run/ -ErrorAction Stop
+          Copy-Item build-windows/NativeExternalCamera/Release/FH3ExternalCamera.exe Stage5-Windows-Run/ -ErrorAction Stop
           Copy-Item Stage5-Readme.md Stage5-Windows-Run/README.md
-          Compress-Archive -Path Stage5-Windows-Run/* -DestinationPath FH3NativeCameraStage5-Win64.zip -CompressionLevel Optimal -Force
+          Copy-Item Stage6-Readme.md Stage5-Windows-Run/STAGE6-README.md
+          Compress-Archive -Path Stage5-Windows-Run/* -DestinationPath FH3CameraResearchStage6-Win64.zip -CompressionLevel Optimal -Force
       - uses: actions/upload-artifact@v4
         with:
-          name: FH3-Native-Camera-Stage5-Win64
+          name: FH3-Native-Camera-Stage6-Win64
           path: Stage5-Windows-Run/
           if-no-files-found: error
           retention-days: 90
@@ -72,5 +74,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $tag = 'stage5-experimental-' + '${{ github.run_number }}'
-          gh release create $tag FH3NativeCameraStage5-Win64.zip Stage5-Windows-Run/FH3NativeCameraLoader.exe Stage5-Windows-Run/FH3NativeCameraTest.dll Stage5-Windows-Run/FH3NativeLoadProbe.dll Stage5-Windows-Run/README.md --title "Stage 5 experimental Windows x64 (${{ github.run_number }})" --notes "Stage 5.2 diagnostics: --diagnose is read-only; --probe attempts to load an inert minimal DLL; --activate remains experimental and untested in-game. Exact retail build hash required. No RTSS dependency." --prerelease --target (git rev-parse HEAD).Trim()
+          $tag = 'stage6-experimental-' + '${{ github.run_number }}'
+          gh release create $tag FH3CameraResearchStage6-Win64.zip Stage5-Windows-Run/FH3NativeCameraLoader.exe Stage5-Windows-Run/FH3NativeCameraTest.dll Stage5-Windows-Run/FH3NativeLoadProbe.dll Stage5-Windows-Run/FH3ExternalCamera.exe Stage5-Windows-Run/README.md Stage5-Windows-Run/STAGE6-README.md --title "Stage 6 experimental DLL-free camera bridge Windows x64 (${{ github.run_number }})" --notes "Stage 6 adds FH3ExternalCamera.exe: --inspect read-only; --probe-exec inert DLL-free code execution; --unsafe-freecam / --unsafe-followcam experimental off-thread retail camera calls. Previous Stage 5.2 tools included. Unverified in live FH3. No RTSS. Read STAGE6-README.md." --prerelease --target (git rev-parse HEAD).Trim()
