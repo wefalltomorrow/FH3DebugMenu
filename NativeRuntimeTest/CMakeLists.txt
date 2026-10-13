@@ -9,6 +9,11 @@ if(WIN32)
     target_compile_features(FH3NativeCameraTest PRIVATE cxx_std_20)
     target_link_libraries(FH3NativeCameraTest PRIVATE FH3NativeCameraRequest FH3NativeCameraCore FH3NativeCameraDiscovery FH3NativeCameraOwner FH3NativeCameraCapabilities bcrypt)
     target_compile_definitions(FH3NativeCameraTest PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
+    # Dependency-free inert probe: no CRT startup, imports, hooks, or threads.
+    # Used only to distinguish target DLL load restrictions from camera DLL failures.
+    add_library(FH3NativeLoadProbe SHARED FH3LoadProbeWin.cpp)
+    target_link_options(FH3NativeLoadProbe PRIVATE /NODEFAULTLIB /ENTRY:DllMain)
+    target_compile_definitions(FH3NativeLoadProbe PRIVATE WIN32_LEAN_AND_MEAN NOMINMAX)
     add_executable(FH3NativeCameraLoader FH3CameraLoaderWin.cpp)
     target_compile_features(FH3NativeCameraLoader PRIVATE cxx_std_20)
     target_link_libraries(FH3NativeCameraLoader PRIVATE bcrypt)
