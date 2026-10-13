@@ -1,98 +1,86 @@
-# Forza Horizon 3 — Stage 5: experimental native camera activation
+# Forza Horizon 3 — Stage 5.2: DLL-loading diagnostics
 
-## Purpose and scope
+## Status
 
-This is the **first opt-in in-process camera-command test**, not the complete
-original developer debug menu. It uses native C++ and existing retail
-`Camera::ForzaMultiCam` functions. **No RTSS, external OSD, or PowerShell at
-runtime.** The Stage 5 DLL is not yet validated on Windows or in FH3, and
-cannot be presented as a working retail debug-menu port.
+This package is **experimental and not the original developer debug menu**.
+Windows x64 compilation and five unit tests have passed in GitHub Actions.
+Live FH3 v1.0.125.2 reports that the original camera DLL fails to load:
+`LoadLibraryW` remote thread exit 0; no camera DLL was listed afterward.
 
-The C++ test targets game version `1.0.125.2` **only**, verified with expected
-SHA-256 `7FC4821640BAF5E6F6199D0BEA19861F70550AA4A7E58C0634D7D96CDEA92C14`.
+**Stage 5.2 is designed to isolate this failure. It does not yet fix native camera activation.**
 
-## Why Stage 5 is a meaningful native step
+The supported retail executable SHA-256 is
+`7FC4821640BAF5E6F6199D0BEA19861F70550AA4A7E58C0634D7D96CDEA92C14`.
+The original camera handlers (Follow=0, Free=6, Wheel=9, TrackSeg=12)
+were verified registered in an earlier read-only live report.
 
-Earlier live reports proved one `SplitView` and `Camera::ForzaMultiCam` controller
-with 22 camera-mode entries. Modes 0, 6, 9 and 12 each have populated handlers.
-The setter and getter are pinned to retail RVAs `0x1D63BB0` and `0x1D5DEB0`.
-The main retail `CForza` per-frame method is at RVA `0x1B3D830`, vtable slot 18.
-The original primary vtable has exactly 31 executable entries and a verified
-RTTI Complete Object Locator.
+## Prebuilt Windows package
 
-The Windows Stage 5 DLL implements an experimental per-instance **vtable clone**:
-- Verify SHA-256, CForza RTTI, vtable and function address before modification.
-- Clone the 31 method pointers and preserve MSVC RTTI.
-- Replace only method slot 18 on the live `CForza` instance, not the executable on disk.
-- Dispatch queued camera requests immediately after the original frame update.
-- Validate the live `SplitView` and `ForzaMultiCam` object, vtables, exact setter
-  and getter addresses, and handler entry before calling the original setter.
-- Remember the previous mode and offer restoration on the same owner.
-- Log execution in `%TEMP%\FH3_Native_Camera_Stage5.log`.
+Download the latest experimental prerelease from
+https://github.com/wefalltomorrow/FH3DebugMenu/releases
 
-No text or graphics menu is provided in this stage. Keyboard shortcuts are
-**temporary activation controls**; the goal remains the exact original menu,
-using developer `release.exe` and `profile.exe` as donors.
+Extract the ZIP, leave the EXE and DLLs together, start FH3, and run
+the following in PowerShell from the extracted folder.
 
-## Windows build
-
-Requires Visual Studio 2022/2026 MSVC C++ build tools and CMake. From PowerShell 7:
+### First: read-only diagnosis
 
 ```powershell
-.\Build-Stage5.ps1
+.\FH3NativeCameraLoader.exe --diagnose
 ```
 
-The builder configures for x64, builds, runs five test suites, and copies the
-loader and DLL into `Stage5-Windows-Run`.
+Reports whether the FH3 process has a package identity, an AppContainer
+token, and image-loading / signature / dynamic-code mitigation policies.
+No game memory is modified by this mode. Query failures are reported
+as such; they are not automatically evidence of anti-tamper protection.
 
-**Important:** The native DLL and loader have **not** been compiled or executed
-under Windows in this environment; only the cross-platform C++ library and
-unit tests have been built and passed. Windows compilation may expose issues
-that the Linux tests cannot check.
+### Second: inert loading probe
 
-## Test (once Windows build succeeds)
+```powershell
+.\FH3NativeCameraLoader.exe --probe
+```
 
-Run retail FH3 in free roam. In the `Stage5-Windows-Run` folder:
+Attempts to load `FH3NativeLoadProbe.dll`, a deliberately inert DLL
+with no CRT startup, imports, hooks, game callbacks, worker threads
+or runtime-library dependencies. This **does load a DLL into FH3 if successful**,
+so it isn't read-only, but it does not intentionally modify game state.
+
+- `PROBE_LOADED`: the process accepted a simple DLL. Investigate
+  camera-DLL dependencies, initialization and loader restrictions next.
+- `INERT_PROBE_FAILED`: even the simple DLL didn't appear. Investigate
+  package identity, integrity policies, path access and process protections.
+  It does not by itself prove anti-tamper blocking.
+- `REMOTE_THREAD_EXIT: 0`: compatible with a `LoadLibraryW` failure;
+  the exit code is only 32 bits, and cannot transport `GetLastError`
+  from the target process.
+
+**Please send the full output of both commands.**
+
+### Camera activation (only after loading is understood)
 
 ```powershell
 .\FH3NativeCameraLoader.exe --check
 .\FH3NativeCameraLoader.exe --activate
 ```
 
-`--check` is read-only. `--activate` explicitly loads the experiment DLL into
-FH3 and swaps its in-memory `CForza` instance vtable, so it **may crash** or be
-blocked by Arxan/UWP/security restrictions. Do not run in an online race.
+`--activate` attempts to load the camera DLL and swap a game-owned
+`CForza` instance vtable. It may fail or crash FH3. It is **not** yet
+validated in a live game. Test only in offline free roam.
 
-With FH3 as the foreground game:
+If camera activation eventually works, experimental controls are
+Ctrl+Alt+F8 (FreeCam), Ctrl+Alt+F9 (restore) and Ctrl+Alt+F12
+(disable further commands). The log is
+`%TEMP%\FH3_Native_Camera_Stage5.log`.
 
-- **Ctrl+Alt+F8** — request original FreeCam mode 6.
-- **Ctrl+Alt+F9** — restore the mode captured before the first FreeCam request.
-- **Ctrl+Alt+F12** — stop accepting new commands; module remains resident until
-  game exit to avoid unsafe in-flight unloading.
+## Contents
 
-Then send the full `%TEMP%\FH3_Native_Camera_Stage5.log` and say whether
-FreeCam switched and restoration worked. If the game crashes, collect the crash
-events/dump if available. The log distinguishes failure to attach, absence of
-frame dispatch, and execution of the setter.
+- `FH3NativeCameraLoader.exe`: guarded loader, read-only diagnostics,
+  inert probe and opt-in experimental activation.
+- `FH3NativeLoadProbe.dll`: minimal inert DLL.
+- `FH3NativeCameraTest.dll`: experimental native camera test.
+- `NativeRuntimeTest/`: loader, probe, process diagnostics and camera code.
+- `NativeCameraCore/`, `NativeCameraDiscovery/`,
+  `NativeCameraOwner/`, `NativeCameraCapabilities/`, `Tests/`:
+  complete native source and five unit tests.
 
-### Current verification
-
-- Five native C++ unit test suites built and passed on Linux, including the new
-  command-state tests and prior owner/mode catalog tests.
-- Static PE RVA/RTTI checks against reconstructed retail code passed.
-- Stage 4 live JSON showed all four target modes registered in retail.
-- **No verified Windows build, injector execution, safe hook or live camera
-  activation yet.**
-
-## Source map
-
-- `NativeRuntimeTest/CameraRequestState.hpp/.cpp`: testable queue, snapshots,
-  owner-change detection, validation and restoration.
-- `NativeRuntimeTest/CameraRuntimeWin.cpp`: Windows in-process test DLL.
-- `NativeRuntimeTest/FH3CameraLoaderWin.cpp`: Windows loader with SHA check,
-  `--check` and `--activate` modes.
-- `NativeRuntimeTest/RetailBuildIdentityWin.hpp`: shared retail hash guard.
-- `Tests/test_CameraRequestState.cpp`: new native unit tests.
-- `NativeCameraCore`, `NativeCameraOwner`, `NativeCameraDiscovery`,
-  `NativeCameraCapabilities`: full existing Stage 1–4 native source.
-- `Build-Stage5.ps1`: complete Windows build and test script.
+Everything is built by Windows GitHub Actions. **No local compilation required.**
+There is no RTSS dependency.
