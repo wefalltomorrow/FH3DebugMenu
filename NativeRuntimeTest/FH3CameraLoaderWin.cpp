@@ -5,7 +5,6 @@
 #include <string>
 #include <cstdio>
 #include <cwchar>
-#include <cstdint>
 #include <array>
 
 // One-time native test loader. It DOES modify the selected FH3 process by
@@ -19,7 +18,56 @@ GameInfo FindGame() {
     PROCESSENTRY32W entry{};entry.dwSize=sizeof(entry);
     if(Process32FirstW(snap,&entry)) do {
         if(_wcsicmp(entry.szExeFile,FH3Stage5::kGameExe)!=0) continue;
-    
+        HANDLE process=OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION,FALSE,entry.th32ProcessID);
+        if(!process) continue;
+        std::array<wchar_t,32768> path{};
+        DWORD size=static_cast<DWORD>(path.size());
+        if(QueryFullProcessImageNameW(process,0,path.data(),&size)) {
+            result.pid=entry.th32ProcessID;result.path=path.data();
+        }
+        CloseHandle(process);
+        if(result.pid) break;
+    } while(Process32NextW(snap,&entry));
+    CloseHandle(snap);return result;
+}
+std::uintptr_t ModuleBase(DWORD pid, const wchar_t* name) {
+    HANDLE snap=CreateToolhelp32Snapshot(TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32,pid);
+    if(snap==INVALID_HANDLE_VALUE)return 0;
+    MODULEENTRY32W e{};e.dwSize=sizeof(e);
+    std::uintptr_t address{};
+    if(Module32FirstW(snap,&e)) do {
+        if(_wcsicmp(e.szModule,name)==0) {address=reinterpret_cast<std::uintptr_t>(e.modBaseAddr);break;}
+    } while(Module32NextW(snap,&e));
+    CloseHandle(snap);return address;
+}
+}
+int wmain(int argc, wchar_t** argv) {
+    if(sizeof(void*)!=8) {std::fwprintf(stderr,L"ERROR: 64-bit loader required\n");return 2;}
+    if(argc!=2 || (wcscmp(argv[1],L"--check")!=0 && wcscmp(argv[1],L"--activate")!=0)) {
+        std::wprintf(L"FH3 Native Camera Stage 5 | --check (read-only) or --activate (inject test DLL)\n");return 1;
+    }
+    const auto game=FindGame();
+    if(!game.pid) {std::fwprintf(stderr,L"FH3 retail process not found\n");return 2;}
+    if(!FH3Stage5::VerifyRetailFile(game.path)) {
+        std::fwprintf(stderr,L"ABORT: unsupported game executable hash\n");return 3;
+    }
+    std::wprintf(L"Verified FH3 PID %lu; supported executable SHA-256 MATCH\n",game.pid);
+    if(wcscmp(argv[1],L"--check")==0) {
+        std::wprintf(L"CHECK_OK: no game memory changed.\n");return 0;
+    }
+    wchar_t self[32768]{};
+    if(!GetModuleFileNameW(nullptr,self,32768))return 4;
+    std::wstring library=self;
+    const auto slash=library.find_last_of(L"\\/");
+    if(slash==std::wstring::npos)return 4;
+    library.resize(slash+1);
+    library+=L"FH3NativeCameraTest.dll";
+    if(GetFileAttributesW(library.c_str())==INVALID_FILE_ATTRIBUTES) {
+        std::fwprintf(stderr,L"DLL missing next to loader: %ls\n",library.c_str());return 4;
+    }
+    if(ModuleBase(game.pid,L"FH3NativeCameraTest.dll")) {
+        std::wprintf(L"Native camera test already loaded.\n");return 0;
+    }
     // Stage 5.1: capture the result at EVERY failing API. An unsuccessful
     // Module32NextW ordinarily sets ERROR_NO_MORE_FILES (18); it cannot
     // diagnose CreateRemoteThread, LoadLibraryW, or DllMain failures.
