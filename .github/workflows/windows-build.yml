@@ -58,6 +58,7 @@ jobs:
           Copy-Item build-windows/NativeRuntimeTest/Release/FH3NativeCameraLoader.exe Stage5-Windows-Run/ -ErrorAction Stop
           Copy-Item build-windows/NativeRuntimeTest/Release/FH3NativeCameraTest.dll Stage5-Windows-Run/ -ErrorAction Stop
           Copy-Item Stage5-Readme.md Stage5-Windows-Run/README.md
+          Compress-Archive -Path Stage5-Windows-Run/* -DestinationPath FH3NativeCameraStage5-Win64.zip -CompressionLevel Optimal -Force
       - uses: actions/upload-artifact@v4
         with:
           name: FH3-Native-Camera-Stage5-Win64
@@ -71,4 +72,4 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           $tag = 'stage5-experimental-' + '${{ github.run_number }}'
-          gh release create $tag Stage5-Windows-Run/FH3NativeCameraLoader.exe Stage5-Windows-Run/FH3NativeCameraTest.dll Stage5-Windows-Run/README.md --title "Stage 5 experimental Windows x64 (${{ github.run_number }})" --notes "Experimental native camera activation ONLY. Not the finished debug menu. Compiled and unit-tested in GitHub Actions; untested in-game. Exact retail build hash required; the hook may crash. No RTSS dependency." --prerelease --target (git rev-parse HEAD).Trim()
+          gh release create $tag FH3NativeCameraStage5-Win64.zip Stage5-Windows-Run/FH3NativeCameraLoader.exe Stage5-Windows-Run/FH3NativeCameraTest.dll Stage5-Windows-Run/README.md --title "Stage 5 experimental Windows x64 (${{ github.run_number }})" --notes "Experimental native camera activation ONLY. Not the finished debug menu. Compiled and unit-tested in GitHub Actions; untested in-game. Exact retail build hash required; the hook may crash. No RTSS dependency." --prerelease --target (git rev-parse HEAD).Trim()
