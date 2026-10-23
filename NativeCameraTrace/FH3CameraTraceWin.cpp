@@ -23,6 +23,7 @@
 #include "CameraOwnerResolver.hpp"
 #include "CameraModeCatalog.hpp"
 #include "CameraDelta.hpp"
+#include "CameraModeObservation.hpp"
 
 // All game-process permissions are query/read. Never allocate, inject, call,
 // protect, suspend, patch, hook, or write to the game.
@@ -196,9 +197,19 @@ int wmain(int argc,wchar_t** argv) {
                  static_cast<unsigned long long>(camera.view),
                  static_cast<unsigned long long>(camera.owner),
                  static_cast<unsigned long long>(camera.control));
-    std::wprintf(L"Registered camera-mode entries: %zu (0, 6, 9, 12 present)\n",
+    std::wprintf(L"Camera catalog slots: %zu (handlers 0, 6, 9, 12 present)\n",
                  camera.modeEntries);
     if(inspect) {
+        const auto mode=FH3Trace::ObserveCameraMode(reader,camera.owner);
+        CameraInfo after{};
+        if(!Resolve(reader,base,after)||!Same(camera,after)) {
+            std::fwprintf(stderr,L"ABORT: camera owner changed during mode observation\n");
+            CloseHandle(h);return 6;
+        }
+        std::wprintf(L"MODE_OBSERVATION: %hs",FH3Trace::ModeReadStatusName(mode.status));
+        if(mode.status==FH3Trace::ModeReadStatus::Consistent)
+            std::wprintf(L" mode=%u (two matching reads and handler-pair agreement)",mode.mode);
+        std::wprintf(L"\n");
         std::wprintf(L"INSPECT_OK: read-only; no game code invoked or memory modified.\n");
         CloseHandle(h);return 0;
     }
@@ -211,16 +222,18 @@ int wmain(int argc,wchar_t** argv) {
         std::fwprintf(stderr,L"ERROR: unable to create trace file in current directory\n");
         CloseHandle(h);return 7;
     }
-    data << "elapsed_ms,owner_offset_000_to_23f_hex\n";
+    data << "elapsed_ms,owner_offset_000_to_23f_hex,mode_status,mode_id,handler_hex,reference_hex,mode_address_hex,table_handler_hex,table_reference_hex,proxy_hex,map_hex,map_blocks,start,count\n";
     FH3Trace::CameraDelta changes(kCaptureBytes);
     std::vector<std::uint8_t> capture(kCaptureBytes);
     std::size_t good=0;
+    std::array<std::size_t,7> modeStatuses{};
+    std::array<std::size_t,1024> modes{};
     bool stopped=false;
     const auto start=std::chrono::steady_clock::now();
     const auto total=std::chrono::milliseconds(seconds*1000);
     std::wprintf(L"RECORDING %d seconds at 10 samples/sec. Switch normal in-game camera views while recording.\n",
                  seconds);
-    std::wprintf(L"All reads target only the verified FH3 camera owner. No injection, writes, or hooks.\n");
+    std::wprintf(L"Read-only owner, bounded mode storage and selected catalog entry. No injection, writes, or hooks.\n");
     for(std::size_t sample=0;;++sample) {
         const auto target=start+std::chrono::milliseconds(static_cast<int>(sample*kIntervalMs));
         std::this_thread::sleep_until(target);
@@ -235,8 +248,29 @@ int wmain(int argc,wchar_t** argv) {
             std::fwprintf(stderr,L"WARNING: camera owner memory became unreadable; stopping.\n");
             stopped=true;break;
         }
+        const auto mode=FH3Trace::ObserveCameraMode(reader,camera.owner);
+        CameraInfo after{};
+        if(!Resolve(reader,base,after)||!Same(camera,after)) {
+            std::fwprintf(stderr,L"WARNING: camera identity changed during sampling; stopping.\n");
+            stopped=true;break;
+        }
         const auto elapsed=std::chrono::duration_cast<std::chrono::milliseconds>(now-start).count();
-        data << elapsed << "," << HexBytes(capture) << "\n";
+        data << elapsed << "," << HexBytes(capture) << ","
+             << FH3Trace::ModeReadStatusName(mode.status);
+        ++modeStatuses[static_cast<std::size_t>(mode.status)];
+        if(mode.status==FH3Trace::ModeReadStatus::Consistent) {
+            ++modes[mode.mode];
+            data << "," << mode.mode << std::hex
+                 << ",0x" << mode.handler << ",0x" << mode.reference
+                 << ",0x" << mode.modeAddress << ",0x" << mode.tableHandler
+                 << ",0x" << mode.tableReference << ",0x" << mode.proxy
+                 << ",0x" << mode.map << std::dec << "," << mode.mapSize
+                 << "," << mode.start << "," << mode.count;
+        } else {
+            // Never serialize a failed/partial decode as an accepted mode ID.
+            for(int column=0;column<11;++column)data << ',';
+        }
+        data << "\n";
         if(!data) {
             std::fwprintf(stderr,L"ERROR: trace CSV write failed; recording stopped.\n");
             CloseHandle(h);return 7;
@@ -258,7 +292,7 @@ int wmain(int argc,wchar_t** argv) {
         CloseHandle(h);return 7;
     }
     {
-        summary << "FH3 CAMERA TRACE: READ ONLY\n";
+        summary << "FH3 CAMERA TRACE: READ ONLY, STAGE 10 MODE OBSERVATION\n";
         summary << "Game SHA-256: supported retail v1.0.125.2 verified\n";
         summary << "Image base: 0x" << std::hex << base << "\n";
         summary << "Camera owner: 0x" << std::hex << camera.owner << "\n";
@@ -269,6 +303,17 @@ int wmain(int argc,wchar_t** argv) {
         summary << "Premature stop: " << (stopped ? "yes" : "no") << "\n";
         summary << "Capture region: camera owner +0x000 .. +0x23f\n";
         summary << "No game memory writes, DLL loading, calls or hooks.\n\n";
+        summary << "Mode ID: static retail getter reconstruction, two matching reads, selected catalog handler/reference pair agreement.\n";
+        summary << "Raw owner bytes and decoded mode are sequential observations, not one atomic snapshot.\n";
+        summary << "No lifetime pin, setter safety, mode-name mapping or FreeCam functionality is established.\n";
+        summary << "MODE OBSERVATION STATUS COUNTS\n";
+        for(std::size_t i=0;i<modeStatuses.size();++i)
+            summary << FH3Trace::ModeReadStatusName(static_cast<FH3Trace::ModeReadStatus>(i))
+                    << "," << modeStatuses[i] << "\n";
+        summary << "CONSISTENT MODE IDS (mode_id,samples)\n";
+        for(std::size_t i=0;i<modes.size();++i)
+            if(modes[i])summary << i << "," << modes[i] << "\n";
+        summary << "\n";
         summary << "4-BYTE-ALIGNED FIELDS WITH INFREQUENT TRANSITIONS (<= 30)\n";
         summary << "These are candidates, NOT proven camera-mode fields.\n";
         summary << "offset,transitions,distinct_capped9,initial_u32_hex,last_u32_hex\n";
@@ -287,6 +332,8 @@ int wmain(int argc,wchar_t** argv) {
     }
     CloseHandle(h);
     std::wprintf(L"Trace samples: %zu | stopped early: %ls\n",good,stopped?L"yes":L"no");
+    std::wprintf(L"Consistent mode samples: %zu | rejected mode samples: %zu\n",
+        modeStatuses[0],good-modeStatuses[0]);
     std::wprintf(L"Trace CSV: %ls\n",csv.c_str());
     std::wprintf(L"Summary TXT: %ls\n",report.c_str());
     std::wprintf(L"UPLOAD BOTH FILES for comparison with the original camera modes.\n");

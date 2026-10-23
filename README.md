@@ -12,14 +12,19 @@ Research project to restore the **original developer debug menu** in retail Forz
 - Stage 6 inert six-byte native code probe executed in the game and returned its expected marker
 - Stage 5 DLL loading failed in the target process. In-game camera setter calls remain **untested**.
 
-## Current work: Stage 8 update-entry observation
+## Current work: Stage 10 read-only mode observation
 
-`FH3UpdateProbe.exe` adds an opt-in, DLL-free experiment at the mapped CForza
-update slot. It forwards to the original update, records entry/thread/identity
-observations, and attempts to restore the original table after a short window.
-It invokes no camera commands. **In-game interception remains unverified.**
-Read [Stage8-Readme.md](Stage8-Readme.md) for the test, failure handling,
-retained-memory policy and object-lifetime limitations.
+The first owner trace recorded 300 samples, ten handler-pair transitions and
+five distinct pairs while the user cycled all normal views and reported smooth
+gameplay. Stage 10 extends `FH3CameraTrace.exe` to read the separate numeric
+mode storage, compare two observations and check catalog-handler agreement.
+It makes no game calls or memory changes. Its decoder is awaiting its first
+in-game result. Read [Stage10-Readme.md](Stage10-Readme.md).
+
+The Stage 9 update-completion probe separately recorded 604 entries and 604
+normal returns in a driving test, with successful restoration and smooth
+gameplay reported. Camera setter safety is still unverified. Read
+[Stage9-Readme.md](Stage9-Readme.md) for the wrapper's limits.
 
 ## Stage 7 read-only camera tracing
 

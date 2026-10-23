@@ -1,6 +1,10 @@
-add_library(FH3CameraDelta STATIC CameraDelta.cpp)
+add_library(FH3CameraDelta STATIC CameraDelta.cpp CameraModeObservation.cpp)
 target_compile_features(FH3CameraDelta PUBLIC cxx_std_20)
 target_include_directories(FH3CameraDelta PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(FH3CameraDelta PUBLIC FH3NativeCameraDiscovery)
+add_executable(FH3CameraModeObservationTests test_CameraModeObservation.cpp)
+target_link_libraries(FH3CameraModeObservationTests PRIVATE FH3CameraDelta)
+add_test(NAME CameraModeObservation COMMAND FH3CameraModeObservationTests)
 
 add_executable(FH3CameraDeltaTests test_CameraDelta.cpp)
 target_compile_features(FH3CameraDeltaTests PRIVATE cxx_std_20)
