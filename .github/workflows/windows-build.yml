@@ -1,4 +1,4 @@
-name: FH3 Camera Stage 8 - Windows x64
+name: FH3 Camera Stage 9 - Windows x64
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  windows-stage8:
+  windows-stage9:
     runs-on: windows-2022
     timeout-minutes: 35
     steps:
@@ -24,22 +24,23 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Force Stage8-Windows-Run | Out-Null
-          Copy-Item build-windows/NativeRuntimeTest/Release/FH3NativeCameraLoader.exe Stage8-Windows-Run/ -ErrorAction Stop
-          Copy-Item build-windows/NativeRuntimeTest/Release/FH3NativeCameraTest.dll Stage8-Windows-Run/ -ErrorAction Stop
-          Copy-Item build-windows/NativeRuntimeTest/Release/FH3NativeLoadProbe.dll Stage8-Windows-Run/ -ErrorAction Stop
-          Copy-Item build-windows/NativeExternalCamera/Release/FH3ExternalCamera.exe Stage8-Windows-Run/ -ErrorAction Stop
-          Copy-Item build-windows/NativeCameraTrace/Release/FH3CameraTrace.exe Stage8-Windows-Run/ -ErrorAction Stop
-          Copy-Item build-windows/NativeUpdateProbe/Release/FH3UpdateProbe.exe Stage8-Windows-Run/ -ErrorAction Stop
-          Copy-Item Stage8-Readme.md Stage8-Windows-Run/README.md
-          Copy-Item Stage5-Readme.md Stage8-Windows-Run/STAGE5-README.md
-          Copy-Item Stage6-Readme.md Stage8-Windows-Run/STAGE6-README.md
-          Copy-Item Stage7-Readme.md Stage8-Windows-Run/STAGE7-README.md
-          Compress-Archive -Path Stage8-Windows-Run/* -DestinationPath FH3CameraResearchStage8-Win64.zip -CompressionLevel Optimal -Force
+          New-Item -ItemType Directory -Force Stage9-Windows-Run | Out-Null
+          Copy-Item build-windows/NativeRuntimeTest/Release/FH3NativeCameraLoader.exe Stage9-Windows-Run/ -ErrorAction Stop
+          Copy-Item build-windows/NativeRuntimeTest/Release/FH3NativeCameraTest.dll Stage9-Windows-Run/ -ErrorAction Stop
+          Copy-Item build-windows/NativeRuntimeTest/Release/FH3NativeLoadProbe.dll Stage9-Windows-Run/ -ErrorAction Stop
+          Copy-Item build-windows/NativeExternalCamera/Release/FH3ExternalCamera.exe Stage9-Windows-Run/ -ErrorAction Stop
+          Copy-Item build-windows/NativeCameraTrace/Release/FH3CameraTrace.exe Stage9-Windows-Run/ -ErrorAction Stop
+          Copy-Item build-windows/NativeUpdateProbe/Release/FH3UpdateProbe.exe Stage9-Windows-Run/ -ErrorAction Stop
+          Copy-Item Stage9-Readme.md Stage9-Windows-Run/README.md
+          Copy-Item Stage8-Readme.md Stage9-Windows-Run/STAGE8-README.md
+          Copy-Item Stage5-Readme.md Stage9-Windows-Run/STAGE5-README.md
+          Copy-Item Stage6-Readme.md Stage9-Windows-Run/STAGE6-README.md
+          Copy-Item Stage7-Readme.md Stage9-Windows-Run/STAGE7-README.md
+          Compress-Archive -Path Stage9-Windows-Run/* -DestinationPath FH3CameraResearchStage9-Win64.zip -CompressionLevel Optimal -Force
       - uses: actions/upload-artifact@v4
         with:
-          name: FH3-Native-Camera-Stage8-Win64
-          path: Stage8-Windows-Run/
+          name: FH3-Native-Camera-Stage9-Win64
+          path: Stage9-Windows-Run/
           if-no-files-found: error
           retention-days: 90
       - name: Publish experimental prerelease
@@ -48,5 +49,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $tag = 'stage8-experimental-' + '${{ github.run_number }}'
-          gh release create $tag FH3CameraResearchStage8-Win64.zip Stage8-Windows-Run/FH3UpdateProbe.exe Stage8-Windows-Run/README.md --title "Stage 8 experimental update-entry probe Windows x64 (${{ github.run_number }})" --notes-file Stage8-Readme.md --prerelease --target (git rev-parse HEAD).Trim()
+          $tag = 'stage9-experimental-' + '${{ github.run_number }}'
+          gh release create $tag FH3CameraResearchStage9-Win64.zip Stage9-Windows-Run/FH3UpdateProbe.exe Stage9-Windows-Run/README.md --title "Stage 9 experimental update-completion probe Windows x64 (${{ github.run_number }})" --notes-file Stage9-Readme.md --prerelease --target (git rev-parse HEAD).Trim()

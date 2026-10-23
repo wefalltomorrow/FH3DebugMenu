@@ -12,7 +12,7 @@
 #include <string>
 
 // Experimental observation of the already mapped CForza virtual update entry.
-// No game-function calls from the installer thread, no camera access.
+// No game-function calls from installer/registration threads, no camera access.
 // Snapshot checks and CAS do NOT pin engine object lifetime. Offline free roam
 // only; game transitions/teardown remain an unverified race.
 namespace {
@@ -82,6 +82,60 @@ bool ExecutableImage(HANDLE h,std::uintptr_t address,std::uintptr_t base) {
     const auto p=info.Protect&0xff;
     return p==PAGE_EXECUTE || p==PAGE_EXECUTE_READ || p==PAGE_EXECUTE_READWRITE || p==PAGE_EXECUTE_WRITECOPY;
 }
+// Resolve the API by its owning module + RVA, never by assuming another
+// process maps system DLLs at our addresses. Refuse differing images/bytes.
+std::uintptr_t RegistrationApi(HANDLE h) {
+    const auto local=GetProcAddress(GetModuleHandleW(L"ntdll.dll"),"RtlAddFunctionTable");
+    HMODULE owner{};
+    if(!local || !GetModuleHandleExW(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS|GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+        reinterpret_cast<LPCWSTR>(local),&owner))return 0;
+    std::array<wchar_t,32768> filename{};
+    const DWORD length=GetModuleFileNameW(owner,filename.data(),static_cast<DWORD>(filename.size()));
+    if(!length || length>=filename.size())return 0;
+    const auto slash=wcsrchr(filename.data(),L'\\');
+    const auto name=slash?slash+1:filename.data();
+    const auto localBase=reinterpret_cast<std::uintptr_t>(owner);
+    const auto dos=reinterpret_cast<const IMAGE_DOS_HEADER*>(localBase);
+    if(dos->e_magic!=IMAGE_DOS_SIGNATURE || dos->e_lfanew<=0 || dos->e_lfanew>0x100000)return 0;
+    const auto nt=reinterpret_cast<const IMAGE_NT_HEADERS64*>(localBase+dos->e_lfanew);
+    const auto rva=reinterpret_cast<std::uintptr_t>(local)-localBase;
+    if(nt->Signature!=IMAGE_NT_SIGNATURE || nt->FileHeader.Machine!=IMAGE_FILE_MACHINE_AMD64 ||
+       nt->OptionalHeader.Magic!=IMAGE_NT_OPTIONAL_HDR64_MAGIC || nt->OptionalHeader.SizeOfImage<32 ||
+       rva>nt->OptionalHeader.SizeOfImage-32)return 0;
+    Handle modules(CreateToolhelp32Snapshot(TH32CS_SNAPMODULE|TH32CS_SNAPMODULE32,GetProcessId(h)));
+    if(!modules)return 0;
+    MODULEENTRY32W module{};module.dwSize=sizeof(module);
+    if(Module32FirstW(modules.value,&module))do {
+        if(_wcsicmp(module.szModule,name))continue;
+        const auto remote=reinterpret_cast<std::uintptr_t>(module.modBaseAddr);
+        IMAGE_DOS_HEADER remoteDos{};IMAGE_NT_HEADERS64 remoteNt{};
+        std::array<unsigned char,32> bytes{};MEMORY_BASIC_INFORMATION memory{};
+        if(module.modBaseSize!=nt->OptionalHeader.SizeOfImage || !Read(h,remote,remoteDos) ||
+           remoteDos.e_magic!=IMAGE_DOS_SIGNATURE || remoteDos.e_lfanew!=dos->e_lfanew ||
+           !Read(h,remote+remoteDos.e_lfanew,remoteNt) || remoteNt.Signature!=IMAGE_NT_SIGNATURE ||
+           remoteNt.FileHeader.Machine!=IMAGE_FILE_MACHINE_AMD64 ||
+           remoteNt.FileHeader.TimeDateStamp!=nt->FileHeader.TimeDateStamp ||
+           remoteNt.OptionalHeader.Magic!=IMAGE_NT_OPTIONAL_HDR64_MAGIC ||
+           remoteNt.OptionalHeader.SizeOfImage!=nt->OptionalHeader.SizeOfImage ||
+           !VirtualQueryEx(h,reinterpret_cast<void*>(remote+rva),&memory,sizeof(memory)) ||
+           memory.State!=MEM_COMMIT || memory.Type!=MEM_IMAGE ||
+           reinterpret_cast<std::uintptr_t>(memory.AllocationBase)!=remote ||
+           (memory.Protect&(PAGE_GUARD|PAGE_NOACCESS)) ||
+           !Read(h,remote+rva,bytes) || std::memcmp(bytes.data(),reinterpret_cast<const void*>(local),bytes.size()))return 0;
+        const auto protection=memory.Protect&0xff;
+        if(protection!=PAGE_EXECUTE && protection!=PAGE_EXECUTE_READ &&
+           protection!=PAGE_EXECUTE_READWRITE && protection!=PAGE_EXECUTE_WRITECOPY)return 0;
+        return remote+rva;
+    }while(Module32NextW(modules.value,&module));
+    return 0;
+}
+bool CompletionSignature(HANDLE h,std::uintptr_t base) {
+    constexpr std::array<unsigned char,9> arguments{0x0F,0x28,0xF1,0x4C,0x8B,0xF9,0x45,0x33,0xE4};
+    constexpr std::array<unsigned char,10> epilogue{0xB0,0x01,0x4C,0x8D,0x9C,0x24,0xC0,0x07,0,0};
+    std::array<unsigned char,arguments.size()> first{};
+    std::array<unsigned char,epilogue.size()> last{};
+    return Read(h,base+0x1B3D86D,first) && first==arguments && Read(h,base+0x1B3EF5C,last) && last==epilogue;
+}
 struct Snapshot { std::uintptr_t object{}; std::array<std::uintptr_t,Slots+1> table{}; };
 bool Inspect(HANDLE h,std::uintptr_t base,Snapshot& snapshot) {
     std::uintptr_t table{};
@@ -113,20 +167,48 @@ bool Exchange(HANDLE h,std::uintptr_t code,std::uintptr_t data,SwapContext& cont
        context.status<1 || context.status>3) {std::puts("REMOTE_THREAD_RESULT_INVALID");return false;}
     return true;
 }
-int Probe(HANDLE h,std::uintptr_t base,const Snapshot& snapshot,unsigned seconds,std::ofstream& report) {
+bool RegisterCompletion(HANDLE h,std::uintptr_t code,RemoteBlock& block,std::ofstream& report) {
+    block.exposed=true; // Registration may retain a pointer even after our thread handle closes.
+    Handle thread(CreateRemoteThread(h,nullptr,0,reinterpret_cast<LPTHREAD_START_ROUTINE>(code),nullptr,0,nullptr));
+    if(!thread || WaitForSingleObject(thread.value,5000)!=WAIT_OBJECT_0) {
+        report << "UnwindRegistration=indeterminate; no hook dispatched; memory retained.\n";
+        std::puts("UNWIND_REGISTRATION_NOT_CONFIRMED: no hook dispatched; restart FH3 before another completion test");return false;
+    }
+    DWORD result{};
+    if(!GetExitCodeThread(thread.value,&result))return false;
+    // BOOLEAN only specifies AL. Conservatively require the canonical full
+    // thread exit value 1; refuse unspecified upper bits and exception codes.
+    const bool registered=result==1;
+    report << "UnwindRegistration=" << registered << " ThreadExit=" << result << '\n' << std::flush;
+    std::puts(registered?"UNWIND_REGISTERED":"UNWIND_REGISTRATION_FAILED: no hook dispatched");
+    return registered;
+}
+int Probe(HANDLE h,std::uintptr_t base,const Snapshot& snapshot,unsigned seconds,bool completion,std::ofstream& report) {
+    const auto registrationApi=completion?RegistrationApi(h):0;
+    if(completion && (!registrationApi || !CompletionSignature(h,base))) {
+        std::puts("ABORT: completion ABI signature or system unwind API identity mismatch");return 3;
+    }
     RemoteBlock block(h);
     if(!block.address){std::puts("ABORT: allocation failed");return 4;}
     const auto allocation=reinterpret_cast<std::uintptr_t>(block.address);
-    const auto code=allocation, swapCode=allocation+256, table=allocation+Page+8;
+    const auto code=allocation, swapCode=allocation+256, registrationCode=allocation+512, table=allocation+Page+8;
+    const auto functionTable=allocation+Page+512, unwind=allocation+Page+528;
     const auto data=allocation+2*Page, installData=allocation+3*Page, restoreData=installData+256;
     ProbeState state{};state.expectedObject=snapshot.object;state.globalAddress=base+GlobalRva;state.expectedTable=table;
     auto clone=snapshot.table;clone[UpdateSlot+1]=code;
-    const auto entry=BuildEntryProbe(data,base+UpdateRva), swap=BuildSwapRoutine();
-    if(entry.empty() || entry.size()>256 || swap.size()>Page-256 ||
+    const auto entry=completion?BuildCompletionProbe(data,base+UpdateRva):BuildEntryProbe(data,base+UpdateRva);
+    const auto swap=BuildSwapRoutine();
+    const auto registration=completion?BuildRegistrationThunk(functionTable,allocation,registrationApi):std::vector<std::uint8_t>{};
+    const RUNTIME_FUNCTION function{0,static_cast<DWORD>(entry.size()),static_cast<DWORD>(unwind-allocation)};
+    if(entry.empty() || entry.size()>256 || swap.size()>256 ||
+       (completion && (registration.empty() || registration.size()>Page-512 ||
+        !Write(h,registrationCode,registration.data(),registration.size()) ||
+        !Write(h,functionTable,&function,sizeof(function)) || !Write(h,unwind,CompletionUnwind.data(),CompletionUnwind.size()))) ||
        !Write(h,code,entry.data(),entry.size()) || !Write(h,swapCode,swap.data(),swap.size()) ||
        !Write(h,table-8,clone.data(),sizeof(clone)) || !Write(h,data,&state,sizeof(state)) ||
        !Protect(h,code,PAGE_EXECUTE_READ) || !Protect(h,table-8,PAGE_READONLY) ||
        !FlushInstructionCache(h,reinterpret_cast<void*>(code),Page)) {std::puts("ABORT: preparing probe failed");return 4;}
+    if(completion && !RegisterCompletion(h,registrationCode,block,report))return 5;
     Snapshot final{};
     if(!Inspect(h,base,final) || final.object!=snapshot.object || final.table!=snapshot.table) {
         std::puts("ABORT: identity changed before installation");return 4;
@@ -148,7 +230,7 @@ int Probe(HANDLE h,std::uintptr_t base,const Snapshot& snapshot,unsigned seconds
         const auto wait=WaitForSingleObject(h,100);
         if(wait!=WAIT_TIMEOUT || !Owned(h,base+GlobalRva,snapshot.object,table) || !Read(h,data,state)) {interrupted=true;break;}
         observed=true;
-        if(state.identityMismatches || state.differentThreadEntries || !report) {interrupted=true;break;}
+        if(state.identityMismatches || state.differentThreadEntries || (completion && state.overlappingEntries) || !report) {interrupted=true;break;}
     }
     // Restore only our exact table on the still-current instance. CAS rejects
     // a competing replacement; no original bytes or shared vtables are patched.
@@ -161,11 +243,31 @@ int Probe(HANDLE h,std::uintptr_t base,const Snapshot& snapshot,unsigned seconds
     }
     ProbeState finalState{};
     if(Read(h,data,finalState)) {state=finalState;observed=true;}
+    bool settled=!completion;
+    if(completion && restored) {
+        // Two matching balanced samples are an observation, never proof that
+        // no stale caller can enter later. Keep all code and metadata resident.
+        const auto settleStart=GetTickCount64();
+        while(GetTickCount64()-settleStart<2000) {
+            if(WaitForSingleObject(h,50)!=WAIT_TIMEOUT || !Read(h,data,finalState))break;
+            settled=finalState.active==0 && finalState.entries==finalState.returns &&
+                std::memcmp(&state,&finalState,sizeof(state))==0;
+            state=finalState;
+            if(settled)break;
+        }
+    }
     report << "Entries=" << state.entries << " FirstThreadId=" << state.firstThread
            << " OtherThreadEntries=" << state.differentThreadEntries << " IdentityMismatches=" << state.identityMismatches
            << " Interrupted=" << interrupted << " CancelRequested=" << stop.load() << " Restored=" << restored << '\n'
            << "16 KiB retained until FH3 exits: stale dispatch may still reference cloned table/code.\n"
-           << "Counts prove entry only. They do not prove original completion, a safe camera command point, or FreeCam.\n" << std::flush;
+           << (completion?"Normal returns are counted; camera safety and FreeCam are not established.\n":
+               "Counts prove entry only. They do not prove original completion, a safe camera command point, or FreeCam.\n") << std::flush;
+    if(completion) {
+        report << "Returns=" << state.returns << " Active=" << state.active << " OverlappingEntries=" << state.overlappingEntries
+               << " BalancedSamples=" << settled << "\nUnwind table retained until process exit.\n" << std::flush;
+        std::printf("RETURNS=%llu ACTIVE=%llu OVERLAPPING_ENTRIES=%llu BALANCED_SAMPLES=%u\n",
+            state.returns,state.active,state.overlappingEntries,static_cast<unsigned>(settled));
+    }
     std::printf("ENTRIES=%llu FIRST_THREAD=%llu OTHER_THREAD_ENTRIES=%llu IDENTITY_MISMATCHES=%llu\n",
         state.entries,state.firstThread,state.differentThreadEntries,state.identityMismatches);
     std::puts(restored?"RESTORE_OK: original instance table observed":"RESTORE_NOT_CONFIRMED: restart FH3 before further experiments");
@@ -173,21 +275,24 @@ int Probe(HANDLE h,std::uintptr_t base,const Snapshot& snapshot,unsigned seconds
     if(!restored)return 5;
     if(!report)return 7;
     if(interrupted || !observed || !state.entries || !state.firstThread || state.differentThreadEntries || state.identityMismatches)return 6;
-    std::puts("UPDATE_ENTRY_OBSERVED: original completion and camera safety NOT established");
+    if(completion && (!settled || !state.returns || state.active || state.entries!=state.returns || state.overlappingEntries))return 6;
+    std::puts(completion?"UPDATE_COMPLETION_OBSERVED: normal returns counted; camera safety NOT established":
+        "UPDATE_ENTRY_OBSERVED: original completion and camera safety NOT established");
     return 0;
 }
 }
 int wmain(int argc,wchar_t** argv) {
     static_assert(sizeof(void*)==8,"Windows x64 required");
     const bool inspect=argc==2 && !wcscmp(argv[1],L"--inspect");
-    const bool probe=(argc==2 || argc==3) && !wcscmp(argv[1],L"--probe-update");
+    const bool completion=(argc==2 || argc==3) && !wcscmp(argv[1],L"--probe-completion");
+    const bool probe=completion || ((argc==2 || argc==3) && !wcscmp(argv[1],L"--probe-update"));
     unsigned seconds=10;
     if(probe && argc==3) {
         wchar_t* end{};const auto value=wcstoul(argv[2],&end,10);
         if(end==argv[2] || *end || value<1 || value>30){std::puts("Duration must be 1..30 seconds");return 2;}
         seconds=static_cast<unsigned>(value);
     }
-    if(!inspect && !probe){std::puts("FH3UpdateProbe --inspect | --probe-update [1..30 seconds]\nExperimental offline callback test; no camera commands.");return 2;}
+    if(!inspect && !probe){std::puts("FH3UpdateProbe --inspect | --probe-update [1..30] | --probe-completion [1..30]\nExperimental offline callback test; no camera commands.");return 2;}
     const DWORD pid=FindGame();
     if(!pid){std::puts("ERROR: one running FH3 retail process is required");return 3;}
     const DWORD rights=PROCESS_QUERY_INFORMATION|PROCESS_VM_READ|SYNCHRONIZE|
@@ -215,12 +320,14 @@ int wmain(int argc,wchar_t** argv) {
     swprintf_s(filename,L"FH3_Update_Probe_%04u%02u%02u_%02u%02u%02u_%03u_%lu.txt",
         now.wYear,now.wMonth,now.wDay,now.wHour,now.wMinute,now.wSecond,now.wMilliseconds,GetCurrentProcessId());
     std::ofstream report(filename,std::ios::binary);
-    report << "FH3 experimental update-entry probe, Stage 8\nSupported retail SHA-256 verified\nPID=" << pid
-           << " Base=0x" << std::hex << base << " CForza=0x" << second.object << std::dec << '\n' << std::flush;
+    report << (completion?"FH3 experimental update-completion probe, Stage 9\n":"FH3 experimental update-entry probe, Stage 8\n")
+           << "Supported retail SHA-256 verified\nPID=" << pid
+           << " Base=0x" << std::hex << base << " CForza=0x" << second.object << std::dec
+           << "\nRequestedSeconds=" << seconds << '\n' << std::flush;
     if(!report){std::puts("ABORT: cannot create report");return 7;}
     std::wprintf(L"Report: %ls\n",filename);
     if(!SetConsoleCtrlHandler(ConsoleControl,TRUE)){std::puts("ABORT: cannot install cancellation handler");return 3;}
-    const int result=Probe(process.value,base,second,seconds,report);
+    const int result=Probe(process.value,base,second,seconds,completion,report);
     SetConsoleCtrlHandler(ConsoleControl,FALSE);
     report << "ExitCode=" << result << '\n';report.close();
     return report?result:7;

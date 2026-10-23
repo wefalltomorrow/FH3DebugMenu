@@ -48,6 +48,39 @@ std::vector<std::uint8_t> BuildEntryProbe(std::uintptr_t state,std::uintptr_t or
     c.Target(wrongObject,mismatch); c.Target(wrongGlobal,mismatch); c.Target(valid,forward);
     return c.bytes;
 }
+std::vector<std::uint8_t> BuildCompletionProbe(std::uintptr_t state,std::uintptr_t original) {
+    auto entry=BuildEntryProbe(state,original);
+    if(entry.empty())return {};
+    // Remove only the terminal mov rax,original / jmp rax. Internal branches
+    // still reach the same entry-accounting endpoint after prefix insertion.
+    entry.resize(entry.size()-12);
+    Code c;
+    c.Emit({0x48,0x83,0xEC,0x28});                 // 32-byte shadow space + alignment
+    c.bytes.insert(c.bytes.end(),entry.begin(),entry.end());
+    c.Emit({0x41,0xBB,1,0,0,0});                  // mov r11d,1
+    c.Emit({0xF0,0x4D,0x0F,0xC1,0x5A,0x40});     // lock xadd [r10+64],r11
+    c.Emit({0x4D,0x85,0xDB});                     // test r11,r11 (previous active)
+    const auto alone=c.Branch(0x74);
+    c.Emit({0xF0,0x49,0xFF,0x42,0x48});           // lock inc [r10+72]
+    c.Target(alone,c.bytes.size());
+    c.Emit({0x48,0xB8});c.U64(original);
+    c.Emit({0xFF,0xD0});                          // call rax
+    c.Emit({0x49,0xBA});c.U64(state);             // original may clobber r10
+    c.Emit({0xF0,0x49,0xFF,0x42,0x38});           // lock inc returns
+    c.Emit({0xF0,0x49,0xFF,0x4A,0x40});           // lock dec active
+    c.Emit({0x48,0x83,0xC4,0x28,0xC3});           // canonical epilogue; preserve RAX/XMM0
+    return c.bytes;
+}
+std::vector<std::uint8_t> BuildRegistrationThunk(std::uintptr_t table,std::uintptr_t base,std::uintptr_t api) {
+    if(!table || table%4 || !base || !api)return {};
+    Code c;
+    c.Emit({0x48,0xB9});c.U64(table);
+    c.Emit({0xBA,1,0,0,0});
+    c.Emit({0x49,0xB8});c.U64(base);
+    c.Emit({0x48,0xB8});c.U64(api);
+    c.Emit({0xFF,0xE0});
+    return c.bytes;
+}
 std::vector<std::uint8_t> BuildSwapRoutine() {
     Code c;
     c.Emit({0x49,0x89,0xCA});                       // mov r10,rcx
