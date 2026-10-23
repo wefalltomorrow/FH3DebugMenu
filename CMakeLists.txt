@@ -14,3 +14,6 @@ add_subdirectory(NativeExternalCamera)
 
 # Read-only Stage 7 runtime state tracing.
 add_subdirectory(NativeCameraTrace)
+
+# Stage 8 opt-in inert update-entry observation; no camera calls.
+add_subdirectory(NativeUpdateProbe)

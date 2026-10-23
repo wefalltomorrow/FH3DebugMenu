@@ -237,6 +237,10 @@ int wmain(int argc,wchar_t** argv) {
         }
         const auto elapsed=std::chrono::duration_cast<std::chrono::milliseconds>(now-start).count();
         data << elapsed << "," << HexBytes(capture) << "\n";
+        if(!data) {
+            std::fwprintf(stderr,L"ERROR: trace CSV write failed; recording stopped.\n");
+            CloseHandle(h);return 7;
+        }
         if(!changes.Add(capture)) {
             std::fwprintf(stderr,L"ERROR: unexpected local capture size\n");
             stopped=true;break;
@@ -244,8 +248,16 @@ int wmain(int argc,wchar_t** argv) {
         ++good;
     }
     data.close();
+    if(!data) {
+        std::fwprintf(stderr,L"ERROR: trace CSV could not be finalized.\n");
+        CloseHandle(h);return 7;
+    }
     std::ofstream summary(report,std::ios::binary);
-    if(summary) {
+    if(!summary) {
+        std::fwprintf(stderr,L"ERROR: unable to create summary TXT; trace is incomplete.\n");
+        CloseHandle(h);return 7;
+    }
+    {
         summary << "FH3 CAMERA TRACE: READ ONLY\n";
         summary << "Game SHA-256: supported retail v1.0.125.2 verified\n";
         summary << "Image base: 0x" << std::hex << base << "\n";
@@ -267,6 +279,11 @@ int wmain(int argc,wchar_t** argv) {
                     << std::setw(8) << candidate.initial << ",0x"
                     << std::setw(8) << candidate.last << std::dec << "\n";
         }
+    }
+    summary.close();
+    if(!summary) {
+        std::fwprintf(stderr,L"ERROR: summary TXT could not be finalized.\n");
+        CloseHandle(h);return 7;
     }
     CloseHandle(h);
     std::wprintf(L"Trace samples: %zu | stopped early: %ls\n",good,stopped?L"yes":L"no");

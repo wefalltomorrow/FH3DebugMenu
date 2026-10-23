@@ -1,4 +1,4 @@
-name: FH3 Camera Stage 7 - Windows x64
+name: FH3 Camera Stage 8 - Windows x64
 
 on:
   push:
@@ -9,7 +9,7 @@ permissions:
   contents: write
 
 jobs:
-  windows-stage7:
+  windows-stage8:
     runs-on: windows-2022
     timeout-minutes: 35
     steps:
@@ -19,25 +19,27 @@ jobs:
       - name: Compile camera tools and tests
         run: cmake --build build-windows --config Release --parallel 4
       - name: Run native tests
-        run: ctest --test-dir build-windows -C Release --output-on-failure
+        run: ctest --test-dir build-windows -C Release --output-on-failure --verbose
       - name: Stage binaries
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          New-Item -ItemType Directory -Force Stage7-Windows-Run | Out-Null
-          Copy-Item build-windows/NativeRuntimeTest/Release/FH3NativeCameraLoader.exe Stage7-Windows-Run/ -ErrorAction Stop
-          Copy-Item build-windows/NativeRuntimeTest/Release/FH3NativeCameraTest.dll Stage7-Windows-Run/ -ErrorAction Stop
-          Copy-Item build-windows/NativeRuntimeTest/Release/FH3NativeLoadProbe.dll Stage7-Windows-Run/ -ErrorAction Stop
-          Copy-Item build-windows/NativeExternalCamera/Release/FH3ExternalCamera.exe Stage7-Windows-Run/ -ErrorAction Stop
-          Copy-Item build-windows/NativeCameraTrace/Release/FH3CameraTrace.exe Stage7-Windows-Run/ -ErrorAction Stop
-          Copy-Item Stage5-Readme.md Stage7-Windows-Run/README.md
-          Copy-Item Stage6-Readme.md Stage7-Windows-Run/STAGE6-README.md
-          Copy-Item Stage7-Readme.md Stage7-Windows-Run/STAGE7-README.md
-          Compress-Archive -Path Stage7-Windows-Run/* -DestinationPath FH3CameraResearchStage7-Win64.zip -CompressionLevel Optimal -Force
+          New-Item -ItemType Directory -Force Stage8-Windows-Run | Out-Null
+          Copy-Item build-windows/NativeRuntimeTest/Release/FH3NativeCameraLoader.exe Stage8-Windows-Run/ -ErrorAction Stop
+          Copy-Item build-windows/NativeRuntimeTest/Release/FH3NativeCameraTest.dll Stage8-Windows-Run/ -ErrorAction Stop
+          Copy-Item build-windows/NativeRuntimeTest/Release/FH3NativeLoadProbe.dll Stage8-Windows-Run/ -ErrorAction Stop
+          Copy-Item build-windows/NativeExternalCamera/Release/FH3ExternalCamera.exe Stage8-Windows-Run/ -ErrorAction Stop
+          Copy-Item build-windows/NativeCameraTrace/Release/FH3CameraTrace.exe Stage8-Windows-Run/ -ErrorAction Stop
+          Copy-Item build-windows/NativeUpdateProbe/Release/FH3UpdateProbe.exe Stage8-Windows-Run/ -ErrorAction Stop
+          Copy-Item Stage8-Readme.md Stage8-Windows-Run/README.md
+          Copy-Item Stage5-Readme.md Stage8-Windows-Run/STAGE5-README.md
+          Copy-Item Stage6-Readme.md Stage8-Windows-Run/STAGE6-README.md
+          Copy-Item Stage7-Readme.md Stage8-Windows-Run/STAGE7-README.md
+          Compress-Archive -Path Stage8-Windows-Run/* -DestinationPath FH3CameraResearchStage8-Win64.zip -CompressionLevel Optimal -Force
       - uses: actions/upload-artifact@v4
         with:
-          name: FH3-Native-Camera-Stage7-Win64
-          path: Stage7-Windows-Run/
+          name: FH3-Native-Camera-Stage8-Win64
+          path: Stage8-Windows-Run/
           if-no-files-found: error
           retention-days: 90
       - name: Publish experimental prerelease
@@ -46,5 +48,5 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           $ErrorActionPreference = 'Stop'
-          $tag = 'stage7-experimental-' + '${{ github.run_number }}'
-          gh release create $tag FH3CameraResearchStage7-Win64.zip Stage7-Windows-Run/FH3NativeCameraLoader.exe Stage7-Windows-Run/FH3NativeCameraTest.dll Stage7-Windows-Run/FH3NativeLoadProbe.dll Stage7-Windows-Run/FH3ExternalCamera.exe Stage7-Windows-Run/FH3CameraTrace.exe Stage7-Windows-Run/README.md Stage7-Windows-Run/STAGE6-README.md Stage7-Windows-Run/STAGE7-README.md --title "Stage 7 read-only camera state tracing Windows x64 (${{ github.run_number }})" --notes "Stage 7 adds FH3CameraTrace.exe (read-only camera state capture: --inspect or --record 30). The older Stage 6 and Stage 5 tools remain experimental. All code is compiled by Windows CI. No RTSS. Read STAGE7-README.md." --prerelease --target (git rev-parse HEAD).Trim()
+          $tag = 'stage8-experimental-' + '${{ github.run_number }}'
+          gh release create $tag FH3CameraResearchStage8-Win64.zip Stage8-Windows-Run/FH3UpdateProbe.exe Stage8-Windows-Run/README.md --title "Stage 8 experimental update-entry probe Windows x64 (${{ github.run_number }})" --notes-file Stage8-Readme.md --prerelease --target (git rev-parse HEAD).Trim()
